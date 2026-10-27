@@ -94,9 +94,10 @@ def process_pdf(pdf_file):
                 current_row += 2
                 
     # ضبط أوتوماتيكي لعرض الأعمدة
-    for col in ws.columns:
-        max_len = max(len(str(cell.value or '')) for cell in col)
-        ws.column_dimensions[col.column_letter].width = max(max_len + 3, 12)
+ for col in ws.columns:
+    max_len = max(len(str(cell.value or '')) for cell in col)
+    col_letter = col[0].column_letter # الطريقة الصحيحة لجلب الحرف
+    ws.column_dimensions[col_letter].width = max(max_len + 3, 12)
         
     excel_buffer = BytesIO()
     wb.save(excel_buffer)
