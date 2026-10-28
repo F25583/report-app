@@ -24,7 +24,6 @@ uploaded_file = st.file_uploader("Choose PDF File", type=["pdf"])
 def clean_cell_value(val):
     if val is None:
         return ""
-    # تنظيف أي رموز غريبة أو أسهم مسببة للمشاكل في خلايا الإكسيل
     cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\n\r\t]', ' ', str(val))
     return cleaned.strip()
 
@@ -48,8 +47,6 @@ def process_pdf(pdf_file):
     wb = Workbook()
     ws = wb.active
     ws.title = "Report"
-    
-    ws.views.sheetView.showGridLines = True
     
     header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
     header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
@@ -79,7 +76,7 @@ def process_pdf(pdf_file):
                 current_row += 1
         current_row += 2
 
-    # استخراج الجداول يدوياً دون الاعتماد على لوجيك داتا فريمز المسبب للخطأ
+    # استخراج الجداول يدوياً
     with pdfplumber.open(pdf_file) as pdf:
         for page_num, page in enumerate(pdf.pages, start=1):
             tables = page.extract_tables()
@@ -90,7 +87,7 @@ def process_pdf(pdf_file):
                 ws.cell(row=current_row, column=1, value=f"[Table {table_idx} - Page {page_num}]").font = Font(bold=True)
                 current_row += 1
                 
-                # السطر الأول نعتبره الترويسة (Header)
+                # السطر الأول هو الترويسة (Header)
                 headers = table[0]
                 for col_idx, header_val in enumerate(headers, start=1):
                     clean_hdr = clean_cell_value(header_val)
