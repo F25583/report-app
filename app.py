@@ -3,7 +3,6 @@ import pdfplumber
 import pandas as pd
 from io import BytesIO
 from openpyxl import Workbook
-from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 
@@ -11,6 +10,7 @@ from openpyxl.utils import get_column_letter
 import arabic_reshaper
 from bidi.algorithm import get_display
 from pdfminer.high_level import extract_text as pdfminer_extract
+import re
 
 # PAGE CONFIG
 st.set_page_config(page_title="PDF to Excel", page_icon="📂", layout="wide")
@@ -21,21 +21,27 @@ st.write("Upload your Outlook emails PDF file to extract texts and tables correc
 # FILE UPLOADER
 uploaded_file = st.file_uploader("Choose PDF File", type=["pdf"])
 
+def clean_cell_value(val):
+    if val is None:
+        return ""
+    # تنظيف أي رموز غريبة أو أسهم مسببة للمشاكل في خلايا الإكسيل
+    cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\n\r\t]', ' ', str(val))
+    return cleaned.strip()
+
 def fix_arabic_text(text):
     if not text:
         return ""
-    # تنظيف النصوص من رموز الـ cid الشائعة إن وجدت
     lines = []
     for line in text.split('\n'):
         if "(cid:" in line:
-            # محاولة تنظيف السطر من أكواد السيرفر الافتراضية
-            import re
             line = re.sub(r'\(cid:\d+\)', '', line)
         if line.strip():
-            # إعادة تشكيل الحروف العربية المقلوبة وتصحيح اتجاهها
-            reshaped_text = arabic_reshaper.reshape(line)
-            bidi_text = get_display(reshaped_text)
-            lines.append(bidi_text)
+            try:
+                reshaped_text = arabic_reshaper.reshape(line)
+                bidi_text = get_display(reshaped_text)
+                lines.append(bidi_text)
+            except:
+                lines.append(line)
     return '\n'.join(lines)
 
 def process_pdf(pdf_file):
@@ -43,8 +49,7 @@ def process_pdf(pdf_file):
     ws = wb.active
     ws.title = "Report"
     
-    # دعم اتجاه الصفحة من اليمين لليسار في الإكسيل لعرض عربي صحيح
-    ws.views.sheetView[0].showGridLines = True
+    ws.views.sheetView.showGridLines = True
     
     header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
     header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
@@ -52,9 +57,9 @@ def process_pdf(pdf_file):
     
     current_row = 1
     
-    # استخدام محرك قراءة متقدم للنصوص العربية المستعصية
+    # قراءة النصوص بالـ PDFMiner الذكي للعربي
     pdf_bytes = pdf_file.read()
-    pdf_file.seek(0) # إعادة المؤشر للبداية لقراءة الجداول لاحقاً
+    pdf_file.seek(0)
     
     try:
         raw_text = pdfminer_extract(BytesIO(pdf_bytes))
@@ -62,7 +67,7 @@ def process_pdf(pdf_file):
     except:
         fixed_text = ""
 
-    # كتابة النصوص المصلحة في أول الشيت
+    # كتابة النصوص المستخرجة في أول الشيت
     if fixed_text:
         ws.cell(row=current_row, column=1, value="--- نصوص ومواضيع الإيميلات المستخرجة ---").font = Font(bold=True, color="FF0000")
         current_row += 1
@@ -70,49 +75,51 @@ def process_pdf(pdf_file):
             if line.strip():
                 cell = ws.cell(row=current_row, column=1, value=line)
                 cell.font = text_font
-                cell.alignment = Alignment(horizontal="right") # محاذاة لليمين للعربي
+                cell.alignment = Alignment(horizontal="right")
                 current_row += 1
         current_row += 2
 
-    # استخراج الجداول وتصحيح نصوصها بداخل الخلايا
+    # استخراج الجداول يدوياً دون الاعتماد على لوجيك داتا فريمز المسبب للخطأ
     with pdfplumber.open(pdf_file) as pdf:
         for page_num, page in enumerate(pdf.pages, start=1):
             tables = page.extract_tables()
             for table_idx, table in enumerate(tables, start=1):
-                if not table:
+                if not table or len(table) == 0:
                     continue
+                
                 ws.cell(row=current_row, column=1, value=f"[Table {table_idx} - Page {page_num}]").font = Font(bold=True)
                 current_row += 1
                 
-                # تصحيح نصوص الجدول خلايا خلايا
-                fixed_table = []
-                for row in table:
-                    fixed_row = []
-                    for cell_val in row:
-                        if cell_val:
-                            # إصلاح النصوص العربية داخل خلايا الجدول
-                            fixed_row.append(get_display(arabic_reshaper.reshape(str(cell_val))))
-                        else:
-                            fixed_row.append("")
-                    fixed_table.append(fixed_row)
-                
-                df = pd.DataFrame(fixed_table)
-                if len(df) > 1:
-                    df.columns = df.iloc[0]
-                    df = df[1:]
-                
-                for col_idx, header in enumerate(list(df.columns), start=1):
-                    cell = ws.cell(row=current_row, column=col_idx, value=str(header if header else ''))
+                # السطر الأول نعتبره الترويسة (Header)
+                headers = table[0]
+                for col_idx, header_val in enumerate(headers, start=1):
+                    clean_hdr = clean_cell_value(header_val)
+                    if clean_hdr:
+                        try:
+                            clean_hdr = get_display(arabic_reshaper.reshape(clean_hdr))
+                        except:
+                            pass
+                    cell = ws.cell(row=current_row, column=col_idx, value=clean_hdr)
                     cell.font = header_font
                     cell.fill = header_fill
-                    cell.alignment = Alignment(horizontal="center")
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
                 current_row += 1
                 
-                for r in dataframe_to_rows(df, index=False, header=False):
-                    for col_idx, value in enumerate(r, start=1):
-                        cell = ws.cell(row=current_row, column=col_idx, value=value)
-                        cell.alignment = Alignment(horizontal="right")
-                    current_row += 1
+                # بقية الأسطر هي البيانات (Data Rows)
+                if len(table) > 1:
+                    for row_data in table[1:]:
+                        for col_idx, cell_val in enumerate(row_data, start=1):
+                            clean_val = clean_cell_value(cell_val)
+                            if clean_val:
+                                try:
+                                    clean_val = get_display(arabic_reshaper.reshape(clean_val))
+                                ]except:
+                                    pass
+                            cell = ws.cell(row=current_row, column=col_idx, value=clean_val)
+                            cell.font = text_font
+                            cell.alignment = Alignment(horizontal="right", vertical="center")
+                        current_row += 1
+                
                 current_row += 2
                 
     # Safe Auto-fit column widths
