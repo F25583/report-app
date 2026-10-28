@@ -113,7 +113,7 @@ def process_pdf(pdf_file):
                             if clean_val:
                                 try:
                                     clean_val = get_display(arabic_reshaper.reshape(clean_val))
-                                ]except:
+                                except:
                                     pass
                             cell = ws.cell(row=current_row, column=col_idx, value=clean_val)
                             cell.font = text_font
