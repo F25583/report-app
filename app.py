@@ -7,40 +7,76 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 
+# مكتبات معالجة وإصلاح اللغة العربية
+import arabic_reshaper
+from bidi.algorithm import get_display
+from pdfminer.high_level import extract_text as pdfminer_extract
+
 # PAGE CONFIG
 st.set_page_config(page_title="PDF to Excel", page_icon="📂", layout="wide")
 
-st.title("📂 PDF Emails to Excel Converter")
-st.write("Upload your Outlook emails PDF file to extract text and tables automatically.")
+st.title("📂 PDF Emails to Excel Converter (Arabic Supported)")
+st.write("Upload your Outlook emails PDF file to extract texts and tables correctly.")
 
 # FILE UPLOADER
 uploaded_file = st.file_uploader("Choose PDF File", type=["pdf"])
+
+def fix_arabic_text(text):
+    if not text:
+        return ""
+    # تنظيف النصوص من رموز الـ cid الشائعة إن وجدت
+    lines = []
+    for line in text.split('\n'):
+        if "(cid:" in line:
+            # محاولة تنظيف السطر من أكواد السيرفر الافتراضية
+            import re
+            line = re.sub(r'\(cid:\d+\)', '', line)
+        if line.strip():
+            # إعادة تشكيل الحروف العربية المقلوبة وتصحيح اتجاهها
+            reshaped_text = arabic_reshaper.reshape(line)
+            bidi_text = get_display(reshaped_text)
+            lines.append(bidi_text)
+    return '\n'.join(lines)
 
 def process_pdf(pdf_file):
     wb = Workbook()
     ws = wb.active
     ws.title = "Report"
     
+    # دعم اتجاه الصفحة من اليمين لليسار في الإكسيل لعرض عربي صحيح
+    ws.views.sheetView[0].showGridLines = True
+    
     header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
     header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
-    text_font = Font(name="Calibri", size=11, italic=True, color="333333")
+    text_font = Font(name="Calibri", size=11, color="333333")
     
     current_row = 1
     
+    # استخدام محرك قراءة متقدم للنصوص العربية المستعصية
+    pdf_bytes = pdf_file.read()
+    pdf_file.seek(0) # إعادة المؤشر للبداية لقراءة الجداول لاحقاً
+    
+    try:
+        raw_text = pdfminer_extract(BytesIO(pdf_bytes))
+        fixed_text = fix_arabic_text(raw_text)
+    except:
+        fixed_text = ""
+
+    # كتابة النصوص المصلحة في أول الشيت
+    if fixed_text:
+        ws.cell(row=current_row, column=1, value="--- نصوص ومواضيع الإيميلات المستخرجة ---").font = Font(bold=True, color="FF0000")
+        current_row += 1
+        for line in fixed_text.split('\n'):
+            if line.strip():
+                cell = ws.cell(row=current_row, column=1, value=line)
+                cell.font = text_font
+                cell.alignment = Alignment(horizontal="right") # محاذاة لليمين للعربي
+                current_row += 1
+        current_row += 2
+
+    # استخراج الجداول وتصحيح نصوصها بداخل الخلايا
     with pdfplumber.open(pdf_file) as pdf:
         for page_num, page in enumerate(pdf.pages, start=1):
-            # Extract Text
-            text = page.extract_text()
-            if text:
-                ws.cell(row=current_row, column=1, value=f"--- Page {page_num} Text ---").font = Font(bold=True, color="FF0000")
-                current_row += 1
-                for line in text.split('\n'):
-                    if line.strip():
-                        ws.cell(row=current_row, column=1, value=line).font = text_font
-                        current_row += 1
-                current_row += 1
-            
-            # Extract Tables
             tables = page.extract_tables()
             for table_idx, table in enumerate(tables, start=1):
                 if not table:
@@ -48,7 +84,19 @@ def process_pdf(pdf_file):
                 ws.cell(row=current_row, column=1, value=f"[Table {table_idx} - Page {page_num}]").font = Font(bold=True)
                 current_row += 1
                 
-                df = pd.DataFrame(table)
+                # تصحيح نصوص الجدول خلايا خلايا
+                fixed_table = []
+                for row in table:
+                    fixed_row = []
+                    for cell_val in row:
+                        if cell_val:
+                            # إصلاح النصوص العربية داخل خلايا الجدول
+                            fixed_row.append(get_display(arabic_reshaper.reshape(str(cell_val))))
+                        else:
+                            fixed_row.append("")
+                    fixed_table.append(fixed_row)
+                
+                df = pd.DataFrame(fixed_table)
                 if len(df) > 1:
                     df.columns = df.iloc[0]
                     df = df[1:]
@@ -62,7 +110,8 @@ def process_pdf(pdf_file):
                 
                 for r in dataframe_to_rows(df, index=False, header=False):
                     for col_idx, value in enumerate(r, start=1):
-                        ws.cell(row=current_row, column=col_idx, value=value)
+                        cell = ws.cell(row=current_row, column=col_idx, value=value)
+                        cell.alignment = Alignment(horizontal="right")
                     current_row += 1
                 current_row += 2
                 
@@ -82,14 +131,14 @@ def process_pdf(pdf_file):
     return excel_buffer
 
 if uploaded_file is not None:
-    with st.spinner("Processing PDF... Please wait..."):
+    with st.spinner("Processing Arabic PDF... Please wait..."):
         try:
             excel_data = process_pdf(uploaded_file)
             st.success("Success!")
             st.download_button(
                 label="📥 Download Excel Report",
                 data=excel_data,
-                file_name="Converted_Report.xlsx",
+                file_name="Converted_Arabic_Report.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
         except Exception as e:
