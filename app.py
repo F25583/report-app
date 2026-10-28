@@ -24,8 +24,13 @@ uploaded_file = st.file_uploader("Choose PDF File", type=["pdf"])
 def clean_cell_value(val):
     if val is None:
         return ""
-    cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\n\r\t]', ' ', str(val))
-    return cleaned.strip()
+    # تنظيف النصوص من الرموز والأسهم والأسطر الجديدة لمنع أخطاء الإكسيل
+    cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\n\r\t\^]', ' ', str(val))
+    cleaned = cleaned.strip()
+    # إذا كانت الخلية تحتوي على نص طويل جداً (مثل جملة التحذير)، نختصرها لحماية الشيت
+    if len(cleaned) > 150:
+        return cleaned[:150] + "..."
+    return cleaned
 
 def fix_arabic_text(text):
     if not text:
@@ -54,7 +59,7 @@ def process_pdf(pdf_file):
     
     current_row = 1
     
-    # قراءة النصوص بالـ PDFMiner الذكي للعربي
+    # قراءة نصوص الإيميلات
     pdf_bytes = pdf_file.read()
     pdf_file.seek(0)
     
@@ -76,7 +81,7 @@ def process_pdf(pdf_file):
                 current_row += 1
         current_row += 2
 
-    # استخراج الجداول يدوياً
+    # استخراج الجداول يدوياً صفاً بصف وخلية بخلية بشكل آمن
     with pdfplumber.open(pdf_file) as pdf:
         for page_num, page in enumerate(pdf.pages, start=1):
             tables = page.extract_tables()
@@ -87,39 +92,31 @@ def process_pdf(pdf_file):
                 ws.cell(row=current_row, column=1, value=f"[Table {table_idx} - Page {page_num}]").font = Font(bold=True)
                 current_row += 1
                 
-                # السطر الأول هو الترويسة (Header)
-                headers = table[0]
-                for col_idx, header_val in enumerate(headers, start=1):
-                    clean_hdr = clean_cell_value(header_val)
-                    if clean_hdr:
-                        try:
-                            clean_hdr = get_display(arabic_reshaper.reshape(clean_hdr))
-                        except:
-                            pass
-                    cell = ws.cell(row=current_row, column=col_idx, value=clean_hdr)
-                    cell.font = header_font
-                    cell.fill = header_fill
-                    cell.alignment = Alignment(horizontal="center", vertical="center")
-                current_row += 1
-                
-                # بقية الأسطر هي البيانات (Data Rows)
-                if len(table) > 1:
-                    for row_data in table[1:]:
-                        for col_idx, cell_val in enumerate(row_data, start=1):
-                            clean_val = clean_cell_value(cell_val)
-                            if clean_val:
-                                try:
-                                    clean_val = get_display(arabic_reshaper.reshape(clean_val))
-                                except:
-                                    pass
-                            cell = ws.cell(row=current_row, column=col_idx, value=clean_val)
+                # كتابة صفوف الجدول بالكامل
+                for row_idx, row_data in enumerate(table):
+                    for col_idx, cell_val in enumerate(row_data, start=1):
+                        clean_val = clean_cell_value(cell_val)
+                        if clean_val:
+                            try:
+                                clean_val = get_display(arabic_reshaper.reshape(clean_val))
+                            except:
+                                pass
+                        
+                        cell = ws.cell(row=current_row, column=col_idx, value=clean_val)
+                        
+                        # تنسيق الصف الأول كترويسة للجدول، وبقية الصفوف كبيانات عادية
+                        if row_idx == 0:
+                            cell.font = header_font
+                            cell.fill = header_fill
+                            cell.alignment = Alignment(horizontal="center", vertical="center")
+                        else:
                             cell.font = text_font
                             cell.alignment = Alignment(horizontal="right", vertical="center")
-                        current_row += 1
+                    current_row += 1
                 
                 current_row += 2
                 
-    # Safe Auto-fit column widths
+    # ضبط تلقائي وآمن لعرض الأعمدة
     for col_idx in range(1, ws.max_column + 1):
         max_len = 0
         col_letter = get_column_letter(col_idx)
