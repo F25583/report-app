@@ -24,12 +24,13 @@ uploaded_file = st.file_uploader("Choose PDF File", type=["pdf"])
 def clean_cell_value(val):
     if val is None:
         return ""
-    # تنظيف النصوص من الرموز والأسهم والأسطر الجديدة لمنع أخطاء الإكسيل
-    cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\n\r\t\^]', ' ', str(val))
+    # تنظيف أي رموز أو أسهم أو علامات غريبة
+    cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\n\r\t\^\*"\'\\\/\[\]\(\)]', ' ', str(val))
     cleaned = cleaned.strip()
-    # إذا كانت الخلية تحتوي على نص طويل جداً (مثل جملة التحذير)، نختصرها لحماية الشيت
-    if len(cleaned) > 150:
-        return cleaned[:150] + "..."
+    
+    # فلتر حماية حاسم: إذا كان النص داخل خلايا الجدول أطول من 50 حرفاً (مثل جمل الحماية والتحذير) يتم حذفه فوراً لحماية الإكسيل
+    if len(cleaned) > 50:
+        return ""
     return cleaned
 
 def fix_arabic_text(text):
@@ -59,7 +60,7 @@ def process_pdf(pdf_file):
     
     current_row = 1
     
-    # قراءة نصوص الإيميلات
+    # قراءة نصوص الإيميلات المكتوبة أولاً
     pdf_bytes = pdf_file.read()
     pdf_file.seek(0)
     
@@ -69,7 +70,6 @@ def process_pdf(pdf_file):
     except:
         fixed_text = ""
 
-    # كتابة النصوص المستخرجة في أول الشيت
     if fixed_text:
         ws.cell(row=current_row, column=1, value="--- نصوص ومواضيع الإيميلات المستخرجة ---").font = Font(bold=True, color="FF0000")
         current_row += 1
@@ -81,7 +81,7 @@ def process_pdf(pdf_file):
                 current_row += 1
         current_row += 2
 
-    # استخراج الجداول يدوياً صفاً بصف وخلية بخلية بشكل آمن
+    # استخراج الجداول يدوياً بفلتر الطول الصارم
     with pdfplumber.open(pdf_file) as pdf:
         for page_num, page in enumerate(pdf.pages, start=1):
             tables = page.extract_tables()
@@ -92,19 +92,26 @@ def process_pdf(pdf_file):
                 ws.cell(row=current_row, column=1, value=f"[Table {table_idx} - Page {page_num}]").font = Font(bold=True)
                 current_row += 1
                 
-                # كتابة صفوف الجدول بالكامل
                 for row_idx, row_data in enumerate(table):
-                    for col_idx, cell_val in enumerate(row_data, start=1):
-                        clean_val = clean_cell_value(cell_val)
-                        if clean_val:
+                    # فحص الصف: إذا كان يحتوي على خلايا فارغة فقط بعد التنظيف نقوم بتخطيه
+                    has_data = False
+                    cleaned_row = []
+                    
+                    for cell_val in row_data:
+                        val = clean_cell_value(cell_val)
+                        if val:
+                            has_data = True
                             try:
-                                clean_val = get_display(arabic_reshaper.reshape(clean_val))
+                                val = get_display(arabic_reshaper.reshape(val))
                             except:
                                 pass
-                        
-                        cell = ws.cell(row=current_row, column=col_idx, value=clean_val)
-                        
-                        # تنسيق الصف الأول كترويسة للجدول، وبقية الصفوف كبيانات عادية
+                        cleaned_row.append(val)
+                    
+                    if not has_data:
+                        continue # تخطي الصفوف الفارغة أو التي تحتوي على جمل تحذيرية طويلة فقط
+                    
+                    for col_idx, final_val in enumerate(cleaned_row, start=1):
+                        cell = ws.cell(row=current_row, column=col_idx, value=final_val)
                         if row_idx == 0:
                             cell.font = header_font
                             cell.fill = header_fill
