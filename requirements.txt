@@ -2,3 +2,6 @@ streamlit
 pdfplumber
 pandas
 openpyxl
+pdfminer.six
+arabic-reshaper
+python-bidi
