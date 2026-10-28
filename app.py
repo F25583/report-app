@@ -6,10 +6,9 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 
-# مكتبات معالجة وإصلاح اللغة العربية
+# مكتبات معالجة وإصلاح اللغة العربية القياسية
 import arabic_reshaper
 from bidi.algorithm import get_display
-from pdfminer.high_level import extract_text as pdfminer_extract
 import re
 
 # PAGE CONFIG
@@ -24,30 +23,14 @@ uploaded_file = st.file_uploader("Choose PDF File", type=["pdf"])
 def clean_cell_value(val):
     if val is None:
         return ""
-    # تنظيف أي رموز أو أسهم أو علامات غريبة
+    # إزالة الأسطر والرموز الخاصة والأسهم الحماية لحماية ورقة العمل
     cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\n\r\t\^\*"\'\\\/\[\]\(\)]', ' ', str(val))
     cleaned = cleaned.strip()
     
-    # فلتر حماية حاسم: إذا كان النص داخل خلايا الجدول أطول من 50 حرفاً (مثل جمل الحماية والتحذير) يتم حذفه فوراً لحماية الإكسيل
-    if len(cleaned) > 50:
+    # إذا كان النص أطول من 60 حرفاً (جمل التحذير الطويلة للإيميل) يتم تفريغه فوراً حماية للإكسيل
+    if len(cleaned) > 60:
         return ""
     return cleaned
-
-def fix_arabic_text(text):
-    if not text:
-        return ""
-    lines = []
-    for line in text.split('\n'):
-        if "(cid:" in line:
-            line = re.sub(r'\(cid:\d+\)', '', line)
-        if line.strip():
-            try:
-                reshaped_text = arabic_reshaper.reshape(line)
-                bidi_text = get_display(reshaped_text)
-                lines.append(bidi_text)
-            except:
-                lines.append(line)
-    return '\n'.join(lines)
 
 def process_pdf(pdf_file):
     wb = Workbook()
@@ -60,70 +43,84 @@ def process_pdf(pdf_file):
     
     current_row = 1
     
-    # قراءة نصوص الإيميلات المكتوبة أولاً
-    pdf_bytes = pdf_file.read()
-    pdf_file.seek(0)
-    
-    try:
-        raw_text = pdfminer_extract(BytesIO(pdf_bytes))
-        fixed_text = fix_arabic_text(raw_text)
-    except:
-        fixed_text = ""
+    ws.cell(row=current_row, column=1, value="--- نصوص ومواضيع الإيميلات والجداول المستخرجة ---").font = Font(bold=True, color="FF0000")
+    current_row += 2
 
-    if fixed_text:
-        ws.cell(row=current_row, column=1, value="--- نصوص ومواضيع الإيميلات المستخرجة ---").font = Font(bold=True, color="FF0000")
-        current_row += 1
-        for line in fixed_text.split('\n'):
-            if line.strip():
-                cell = ws.cell(row=current_row, column=1, value=line)
-                cell.font = text_font
-                cell.alignment = Alignment(horizontal="right")
-                current_row += 1
-        current_row += 2
-
-    # استخراج الجداول يدوياً بفلتر الطول الصارم
+    # فتح الملف واستخراج المحتوى بالكامل عبر محرك موحد وآمن
     with pdfplumber.open(pdf_file) as pdf:
         for page_num, page in enumerate(pdf.pages, start=1):
-            tables = page.extract_tables()
-            for table_idx, table in enumerate(tables, start=1):
-                if not table or len(table) == 0:
-                    continue
-                
-                ws.cell(row=current_row, column=1, value=f"[Table {table_idx} - Page {page_num}]").font = Font(bold=True)
-                current_row += 1
-                
-                for row_idx, row_data in enumerate(table):
-                    # فحص الصف: إذا كان يحتوي على خلايا فارغة فقط بعد التنظيف نقوم بتخطيه
-                    has_data = False
-                    cleaned_row = []
-                    
-                    for cell_val in row_data:
-                        val = clean_cell_value(cell_val)
-                        if val:
-                            has_data = True
+            
+            # 1. قراءة النصوص العادية بأمان تام داخل try لمنع أي انهيار
+            try:
+                text = page.extract_text()
+                if text:
+                    for line in text.split('\n'):
+                        if "(cid:" in line:
+                            line = re.sub(r'\(cid:\d+\)', '', line)
+                        
+                        line_cleaned = line.strip()
+                        # إذا كان السطر هو النص التحذيري الطويل، نتخطاه ولا نكتبه في الشيت
+                        if len(line_cleaned) > 100 or "intended recipient" in line_cleaned.lower():
+                            continue
+                            
+                        if line_cleaned:
                             try:
-                                val = get_display(arabic_reshaper.reshape(val))
+                                reshaped = arabic_reshaper.reshape(line_cleaned)
+                                bidi_line = get_display(reshaped)
                             except:
-                                pass
-                        cleaned_row.append(val)
-                    
-                    if not has_data:
-                        continue # تخطي الصفوف الفارغة أو التي تحتوي على جمل تحذيرية طويلة فقط
-                    
-                    for col_idx, final_val in enumerate(cleaned_row, start=1):
-                        cell = ws.cell(row=current_row, column=col_idx, value=final_val)
-                        if row_idx == 0:
-                            cell.font = header_font
-                            cell.fill = header_fill
-                            cell.alignment = Alignment(horizontal="center", vertical="center")
-                        else:
+                                bidi_line = line_cleaned
+                                
+                            cell = ws.cell(row=current_row, column=1, value=bidi_line)
                             cell.font = text_font
-                            cell.alignment = Alignment(horizontal="right", vertical="center")
+                            cell.alignment = Alignment(horizontal="right")
+                            current_row += 1
                     current_row += 1
-                
-                current_row += 2
-                
-    # ضبط تلقائي وآمن لعرض الأعمدة
+            except:
+                pass # تجاوز أي خطأ تشفير في نصوص الصفحات والانتقال للجداول
+
+            # 2. استخراج الجداول يدوياً بفلتر الحماية الصارم لحجم الخلايا
+            try:
+                tables = page.extract_tables()
+                for table_idx, table in enumerate(tables, start=1):
+                    if not table or len(table) == 0:
+                        continue
+                    
+                    ws.cell(row=current_row, column=1, value=f"[Table {table_idx} - Page {page_num}]").font = Font(bold=True)
+                    current_row += 1
+                    
+                    for row_idx, row_data in enumerate(table):
+                        has_data = False
+                        cleaned_row = []
+                        
+                        for cell_val in row_data:
+                            val = clean_cell_value(cell_val)
+                            if val:
+                                has_data = True
+                                try:
+                                    val = get_display(arabic_reshaper.reshape(val))
+                                except:
+                                    pass
+                            cleaned_row.append(val)
+                        
+                        if not has_data:
+                            continue 
+                        
+                        for col_idx, final_val in enumerate(cleaned_row, start=1):
+                            cell = ws.cell(row=current_row, column=col_idx, value=final_val)
+                            if row_idx == 0:
+                                cell.font = header_font
+                                cell.fill = header_fill
+                                cell.alignment = Alignment(horizontal="center", vertical="center")
+                            else:
+                                cell.font = text_font
+                                cell.alignment = Alignment(horizontal="right", vertical="center")
+                        current_row += 1
+                    
+                    current_row += 2
+            except:
+                pass
+
+    # ضبط تلقائي وآمن لعرض الأعمدة في الإكسيل
     for col_idx in range(1, ws.max_column + 1):
         max_len = 0
         col_letter = get_column_letter(col_idx)
@@ -139,7 +136,7 @@ def process_pdf(pdf_file):
     return excel_buffer
 
 if uploaded_file is not None:
-    with st.spinner("Processing Arabic PDF... Please wait..."):
+    with st.spinner("Processing Arabic PDF Safely... Please wait..."):
         try:
             excel_data = process_pdf(uploaded_file)
             st.success("Success!")
